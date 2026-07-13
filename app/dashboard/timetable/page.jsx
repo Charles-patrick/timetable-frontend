@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api, API_URL } from "@/lib/api";
 import Modal from "@/components/admin/Modal";
+import { formatTime12 } from "@/lib/format";
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const LEVELS = [100, 200, 300, 400, 500];
@@ -10,9 +11,7 @@ const LEVELS = [100, 200, 300, 400, 500];
 export default function TimetablePage() {
   const [semesters, setSemesters] = useState([]);
   const [selectedSemester, setSelectedSemester] = useState("");
-  const [levelFilter, setLevelFilter] = useState("");
-  const [dayFilter, setDayFilter] = useState("");
-  const [search, setSearch] = useState("");
+  const [level, setLevel] = useState(100);
 
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -21,18 +20,18 @@ export default function TimetablePage() {
   const [generating, setGenerating] = useState(false);
   const [generateResult, setGenerateResult] = useState(null);
 
-  // Dropdown data for the manual reassignment modal
   const [lecturers, setLecturers] = useState([]);
   const [venues, setVenues] = useState([]);
   const [timeSlots, setTimeSlots] = useState([]);
+  const [courses, setCourses] = useState([]);
 
-  const [editModalOpen, setEditModalOpen] = useState(false);
-  const [editingEntry, setEditingEntry] = useState(null);
-  const [editForm, setEditForm] = useState({ lecturer: "", venue: "", timeSlot: "" });
-  const [editError, setEditError] = useState("");
-  const [editSaving, setEditSaving] = useState(false);
+  // One shared modal for both "add to empty cell" and "reassign existing entry"
+  const [cellModal, setCellModal] = useState(null); // { mode: "add"|"edit", day, slot, entry? }
+  const [form, setForm] = useState({ course: "", lecturer: "", venue: "", timeSlot: "" });
+  const [formError, setFormError] = useState("");
+  const [saving, setSaving] = useState(false);
 
-  // ── Load semesters + dropdown data once ──────────────────────
+  // ── Load semesters + shared dropdown data once ───────────────
   useEffect(() => {
     async function init() {
       try {
@@ -64,10 +63,7 @@ export default function TimetablePage() {
     setLoading(true);
     setError("");
     try {
-      const params = new URLSearchParams({ semester: selectedSemester });
-      if (levelFilter) params.set("level", levelFilter);
-      if (dayFilter) params.set("day", dayFilter);
-      if (search) params.set("search", search);
+      const params = new URLSearchParams({ semester: selectedSemester, level });
       const { entries } = await api.get(`/timetable?${params}`);
       setEntries(entries);
     } catch (err) {
@@ -77,22 +73,57 @@ export default function TimetablePage() {
     }
   }
 
-  useEffect(() => {
-    loadEntries();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedSemester]);
+  async function loadCourses() {
+    if (!selectedSemester) return;
+    try {
+      const params = new URLSearchParams({ semester: selectedSemester, level });
+      const { courses } = await api.get(`/courses?${params}`);
+      setCourses(courses);
+    } catch (err) {
+      // non-fatal — the "add" modal just won't have options
+    }
+  }
 
   useEffect(() => {
-    const timer = setTimeout(loadEntries, 400);
-    return () => clearTimeout(timer);
+    loadEntries();
+    loadCourses();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [levelFilter, dayFilter, search]);
+  }, [selectedSemester, level]);
+
+  // ── Build the grid: rows = distinct time ranges, columns = days ──
+  const timeRanges = useMemo(() => {
+    const set = new Set(timeSlots.map((t) => `${t.startTime}|${t.endTime}`));
+    return Array.from(set).sort();
+  }, [timeSlots]);
+
+  // slotLookup["Monday|08:00|10:00"] = TimeSlot doc (if that slot exists)
+  const slotLookup = useMemo(() => {
+    const map = {};
+    timeSlots.forEach((t) => {
+      map[`${t.day}|${t.startTime}|${t.endTime}`] = t;
+    });
+    return map;
+  }, [timeSlots]);
+
+  // entryLookup[timeSlotId] = timetable entry (if that slot is filled)
+  const entryLookup = useMemo(() => {
+    const map = {};
+    entries.forEach((e) => {
+      map[e.timeSlot._id] = e;
+    });
+    return map;
+  }, [entries]);
+
+//   const coursesAlreadyScheduled = useMemo(
+//     () => new Set(entries.map((e) => e.course._id)),
+//     [entries]
+//   );
 
   async function handleGenerate() {
     if (!selectedSemester) return;
     if (
       !confirm(
-        "Generate a fresh timetable for this semester? Previous entries stay saved as history, but the timetable view will switch to this new run."
+        "Generate a fresh timetable for this semester? This schedules every course across every level. Previous entries stay saved as history."
       )
     )
       return;
@@ -111,45 +142,84 @@ export default function TimetablePage() {
     }
   }
 
-  function openEditModal(entry) {
-    setEditingEntry(entry);
-    setEditForm({
-      lecturer: entry.lecturer._id,
-      venue: entry.venue._id,
-      timeSlot: entry.timeSlot._id,
-    });
-    setEditError("");
-    setEditModalOpen(true);
-  }
+  function openCell(day, range) {
+    const [startTime, endTime] = range.split("|");
+    const slot = slotLookup[`${day}|${startTime}|${endTime}`];
+    if (!slot) return; // no such time slot exists for this day — nothing to do
 
-  async function handleEditSubmit(e) {
-    e.preventDefault();
-    setEditSaving(true);
-    setEditError("");
-    try {
-      await api.put(`/timetable/${editingEntry._id}`, editForm);
-      setEditModalOpen(false);
-      await loadEntries();
-    } catch (err) {
-      setEditError(err.message || "This change conflicts with another entry");
-    } finally {
-      setEditSaving(false);
+    const entry = entryLookup[slot._id];
+    setFormError("");
+
+    if (entry) {
+      setCellModal({ mode: "edit", day, slot, entry });
+      setForm({
+        course: entry.course._id,
+        lecturer: entry.lecturer._id,
+        venue: entry.venue._id,
+        timeSlot: slot._id,
+      });
+    } else {
+      setCellModal({ mode: "add", day, slot });
+      setForm({
+        course: "",
+        lecturer: lecturers[0]?._id || "",
+        venue: venues[0]?._id || "",
+        timeSlot: slot._id,
+      });
     }
   }
 
-  async function handleDelete(entry) {
-    if (!confirm(`Remove ${entry.course.courseCode} from the timetable?`)) return;
+  function handleCourseChange(courseId) {
+    const course = courses.find((c) => c._id === courseId);
+    setForm((f) => ({
+      ...f,
+      course: courseId,
+      lecturer: course?.lecturer?._id || f.lecturer,
+    }));
+  }
+
+  async function handleSave(e) {
+    e.preventDefault();
+    setSaving(true);
+    setFormError("");
     try {
-      await api.delete(`/timetable/${entry._id}`);
+      if (cellModal.mode === "add") {
+        await api.post("/timetable", {
+          course: form.course,
+          lecturer: form.lecturer,
+          venue: form.venue,
+          timeSlot: form.timeSlot,
+          semester: selectedSemester,
+        });
+      } else {
+        await api.put(`/timetable/${cellModal.entry._id}`, {
+          lecturer: form.lecturer,
+          venue: form.venue,
+          timeSlot: form.timeSlot,
+        });
+      }
+      setCellModal(null);
       await loadEntries();
     } catch (err) {
-      alert(err.message || "Failed to delete entry");
+      setFormError(err.message || "That slot conflicts with another entry");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleRemove() {
+    if (!confirm(`Remove ${cellModal.entry.course.courseCode} from this slot?`)) return;
+    try {
+      await api.delete(`/timetable/${cellModal.entry._id}`);
+      setCellModal(null);
+      await loadEntries();
+    } catch (err) {
+      alert(err.message || "Failed to remove entry");
     }
   }
 
   function exportUrl(format) {
-    const params = new URLSearchParams({ semester: selectedSemester });
-    if (levelFilter) params.set("level", levelFilter);
+    const params = new URLSearchParams({ semester: selectedSemester, level });
     return `${API_URL}/timetable/export${format === "excel" ? "/excel" : ""}?${params}`;
   }
 
@@ -157,15 +227,20 @@ export default function TimetablePage() {
     <div>
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 className="font-display text-3xl font-semibold text-ink">Timetable</h1>
-          <p className="mt-1 text-sm text-slate">Generate, review, and fine-tune the schedule.</p>
+          <h1 className="font-display text-3xl font-semibold text-ink">
+            Timetable
+          </h1>
+          <p className="mt-1 text-sm text-slate">
+            One level at a time — click any empty cell to assign a course
+            yourself.
+          </p>
         </div>
         <button
           onClick={handleGenerate}
           disabled={generating || !selectedSemester}
           className="rounded-sm bg-amber px-5 py-2.5 text-sm font-medium text-board-dark transition hover:bg-amber-dark disabled:opacity-50"
         >
-          {generating ? "Generating…" : "⚡ Generate Timetable"}
+          {generating ? "Generating…" : " Generate for all levels"}
         </button>
       </div>
 
@@ -173,9 +248,13 @@ export default function TimetablePage() {
         <div className="mt-4 rounded-sm border border-rule bg-white p-4 text-sm">
           <p className="text-ink">
             Scheduled <strong>{generateResult.scheduledCount}</strong> of{" "}
-            <strong>{generateResult.totalCourses}</strong> courses.
+            <strong>{generateResult.totalCourses}</strong> courses across the
+            semester.
             {generateResult.unscheduledCount > 0 && (
-              <span className="text-danger"> {generateResult.unscheduledCount} could not be placed.</span>
+              <span className="text-danger">
+                {" "}
+                {generateResult.unscheduledCount} could not be placed.
+              </span>
             )}
           </p>
           {generateResult.unscheduled?.length > 0 && (
@@ -205,38 +284,16 @@ export default function TimetablePage() {
         </select>
 
         <select
-          value={levelFilter}
-          onChange={(e) => setLevelFilter(e.target.value)}
+          value={level}
+          onChange={(e) => setLevel(Number(e.target.value))}
           className="rounded-sm border border-rule bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-board"
         >
-          <option value="">All levels</option>
           {LEVELS.map((l) => (
             <option key={l} value={l}>
               {l} Level
             </option>
           ))}
         </select>
-
-        <select
-          value={dayFilter}
-          onChange={(e) => setDayFilter(e.target.value)}
-          className="rounded-sm border border-rule bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-board"
-        >
-          <option value="">All days</option>
-          {DAYS.map((d) => (
-            <option key={d} value={d}>
-              {d}
-            </option>
-          ))}
-        </select>
-
-        <input
-          type="text"
-          placeholder="Search course, lecturer, venue…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="flex-1 min-w-[200px] rounded-sm border border-rule bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-board"
-        />
 
         <a
           href={exportUrl("pdf")}
@@ -255,84 +312,144 @@ export default function TimetablePage() {
       </div>
 
       {error && (
-        <p role="alert" className="mt-4 rounded-sm bg-danger/10 px-4 py-3 text-sm text-danger">
+        <p
+          role="alert"
+          className="mt-4 rounded-sm bg-danger/10 px-4 py-3 text-sm text-danger"
+        >
           {error}
         </p>
       )}
 
-      <div className="mt-6 overflow-x-auto rounded-sm border border-rule bg-white">
-        <table className="w-full text-left text-sm">
-          <thead className="bg-chalk text-xs uppercase tracking-wide text-slate">
-            <tr>
-              <th className="px-5 py-3">Day</th>
-              <th className="px-5 py-3">Time</th>
-              <th className="px-5 py-3">Course</th>
-              <th className="px-5 py-3">Level</th>
-              <th className="px-5 py-3">Lecturer</th>
-              <th className="px-5 py-3">Venue</th>
-              <th className="px-5 py-3 text-right">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading && (
-              <tr>
-                <td colSpan={7} className="px-5 py-8 text-center text-slate">
-                  Loading…
-                </td>
-              </tr>
-            )}
-            {!loading && entries.length === 0 && (
-              <tr>
-                <td colSpan={7} className="px-5 py-8 text-center text-slate">
-                  No timetable generated yet for this semester.
-                </td>
-              </tr>
-            )}
-            {entries.map((entry) => (
-              <tr key={entry._id} className="border-t border-rule">
-                <td className="px-5 py-3 text-ink">{entry.timeSlot.day}</td>
-                <td className="px-5 py-3 text-slate">
-                  {entry.timeSlot.startTime} – {entry.timeSlot.endTime}
-                </td>
-                <td className="px-5 py-3 text-slate">
-                  <span className="font-medium text-ink">{entry.course.courseCode}</span>
-                  <br />
-                  <span className="text-xs">{entry.course.courseTitle}</span>
-                </td>
-                <td className="px-5 py-3 text-slate">{entry.level}</td>
-                <td className="px-5 py-3 text-slate">{entry.lecturer.name}</td>
-                <td className="px-5 py-3 text-slate">{entry.venue.name}</td>
-                <td className="px-5 py-3 text-right">
-                  <button
-                    onClick={() => openEditModal(entry)}
-                    className="mr-3 text-sm text-board hover:underline"
+      {timeSlots.length === 0 ? (
+        <p className="mt-8 text-sm text-slate">
+          No time slots have been set up yet — add some under Time Slots first.
+        </p>
+      ) : (
+        <div className="mt-6 overflow-x-auto rounded-sm border border-rule bg-white">
+          <table className="w-full border-collapse text-left text-sm">
+            <thead>
+              <tr className="bg-board text-chalk">
+                <th className="border border-rule-dark px-4 py-3 text-xs uppercase tracking-wide">
+                  Time
+                </th>
+                {DAYS.map((day) => (
+                  <th
+                    key={day}
+                    className="border border-rule-dark px-4 py-3 text-xs uppercase tracking-wide"
                   >
-                    Reassign
-                  </button>
-                  <button
-                    onClick={() => handleDelete(entry)}
-                    className="text-sm text-danger hover:underline"
-                  >
-                    Remove
-                  </button>
-                </td>
+                    {day}
+                  </th>
+                ))}
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {loading && (
+                <tr>
+                  <td
+                    colSpan={DAYS.length + 1}
+                    className="px-5 py-8 text-center text-slate"
+                  >
+                    Loading…
+                  </td>
+                </tr>
+              )}
 
-      {editModalOpen && (
+              {!loading &&
+                timeRanges.map((range) => {
+                  const [startTime, endTime] = range.split("|");
+                  return (
+                    <tr key={range}>
+                      <td className="whitespace-nowrap border border-rule bg-chalk px-4 py-3 font-medium text-ink">
+                        {formatTime12(startTime)} – {formatTime12(endTime)}
+                      </td>
+                      {DAYS.map((day) => {
+                        const slot =
+                          slotLookup[`${day}|${startTime}|${endTime}`];
+                        const entry = slot ? entryLookup[slot._id] : null;
+
+                        if (!slot) {
+                          return (
+                            <td
+                              key={day}
+                              className="border border-rule bg-rule/20 px-4 py-3 text-center text-slate"
+                            >
+                              —
+                            </td>
+                          );
+                        }
+
+                        return (
+                          <td
+                            key={day}
+                            onClick={() => openCell(day, range)}
+                            className={`cursor-pointer border border-rule px-4 py-3 align-top transition hover:bg-amber/10 ${
+                              entry ? "bg-white" : "bg-chalk"
+                            }`}
+                          >
+                            {entry ? (
+                              <div>
+                                <div className="font-medium text-ink">
+                                  {entry.course.courseCode}
+                                </div>
+                                <div className="text-xs text-slate">
+                                  {entry.lecturer.name}
+                                </div>
+                                <div className="text-xs text-slate">
+                                  {entry.venue.name}
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="text-center text-slate">+</div>
+                            )}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  );
+                })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {cellModal && (
         <Modal
-          title={`Reassign ${editingEntry.course.courseCode}`}
-          onClose={() => setEditModalOpen(false)}
+          title={
+            cellModal.mode === "add"
+              ? `Assign a course — ${cellModal.day}`
+              : `${cellModal.entry.course.courseCode} — ${cellModal.day}`
+          }
+          onClose={() => setCellModal(null)}
         >
-          <form onSubmit={handleEditSubmit} className="flex flex-col gap-4">
+          <form onSubmit={handleSave} className="flex flex-col gap-4">
+            {cellModal.mode === "add" ? (
+              <label className="flex flex-col gap-1.5 text-sm text-ink">
+                Course
+                <select
+                  required
+                  value={form.course}
+                  onChange={(e) => handleCourseChange(e.target.value)}
+                  className="rounded-sm border border-rule bg-white px-3 py-2 outline-none focus:border-board"
+                >
+                  <option value="">Select a course…</option>
+                  {courses.map((c) => (
+                    <option key={c._id} value={c._id}>
+                      {c.courseCode} — {c.courseTitle}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : (
+              <p className="text-sm text-slate">
+                {cellModal.entry.course.courseTitle}
+              </p>
+            )}
+
             <label className="flex flex-col gap-1.5 text-sm text-ink">
               Lecturer
               <select
-                value={editForm.lecturer}
-                onChange={(e) => setEditForm({ ...editForm, lecturer: e.target.value })}
+                value={form.lecturer}
+                onChange={(e) => setForm({ ...form, lecturer: e.target.value })}
                 className="rounded-sm border border-rule bg-white px-3 py-2 outline-none focus:border-board"
               >
                 {lecturers.map((l) => (
@@ -346,8 +463,8 @@ export default function TimetablePage() {
             <label className="flex flex-col gap-1.5 text-sm text-ink">
               Venue
               <select
-                value={editForm.venue}
-                onChange={(e) => setEditForm({ ...editForm, venue: e.target.value })}
+                value={form.venue}
+                onChange={(e) => setForm({ ...form, venue: e.target.value })}
                 className="rounded-sm border border-rule bg-white px-3 py-2 outline-none focus:border-board"
               >
                 {venues.map((v) => (
@@ -358,34 +475,37 @@ export default function TimetablePage() {
               </select>
             </label>
 
-            <label className="flex flex-col gap-1.5 text-sm text-ink">
-              Time slot
-              <select
-                value={editForm.timeSlot}
-                onChange={(e) => setEditForm({ ...editForm, timeSlot: e.target.value })}
-                className="rounded-sm border border-rule bg-white px-3 py-2 outline-none focus:border-board"
+            {formError && (
+              <p
+                role="alert"
+                className="rounded-sm bg-danger/10 px-3 py-2 text-sm text-danger"
               >
-                {timeSlots.map((t) => (
-                  <option key={t._id} value={t._id}>
-                    {t.day} {t.startTime}–{t.endTime}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            {editError && (
-              <p role="alert" className="rounded-sm bg-danger/10 px-3 py-2 text-sm text-danger">
-                {editError}
+                {formError}
               </p>
             )}
 
-            <button
-              type="submit"
-              disabled={editSaving}
-              className="mt-2 rounded-sm bg-board px-4 py-2.5 text-sm font-medium text-chalk transition hover:bg-board-dark disabled:opacity-60"
-            >
-              {editSaving ? "Saving…" : "Save reassignment"}
-            </button>
+            <div className="mt-2 flex gap-3">
+              <button
+                type="submit"
+                disabled={saving}
+                className="flex-1 rounded-sm bg-board px-4 py-2.5 text-sm font-medium text-chalk transition hover:bg-board-dark disabled:opacity-60"
+              >
+                {saving
+                  ? "Saving…"
+                  : cellModal.mode === "add"
+                    ? "Assign course"
+                    : "Save changes"}
+              </button>
+              {cellModal.mode === "edit" && (
+                <button
+                  type="button"
+                  onClick={handleRemove}
+                  className="rounded-sm border border-danger/30 px-4 py-2.5 text-sm text-danger transition hover:bg-danger/10"
+                >
+                  Remove
+                </button>
+              )}
+            </div>
           </form>
         </Modal>
       )}

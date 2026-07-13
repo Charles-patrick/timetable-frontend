@@ -15,7 +15,7 @@ const NAV_ITEMS = [
   { href: "/dashboard/conflicts", label: "Conflict Reports" },
 ];
 
-export default function Sidebar({ userName }) {
+export default function Sidebar({ userName, open, onClose }) {
   const pathname = usePathname();
   const router = useRouter();
 
@@ -29,7 +29,11 @@ export default function Sidebar({ userName }) {
   }
 
   return (
-    <aside className="flex h-screen w-64 flex-col justify-between bg-board text-chalk">
+    <aside
+      className={`fixed inset-y-0 left-0 z-40 flex h-screen w-64 flex-col justify-between bg-board text-chalk transition-transform duration-200 lg:static lg:translate-x-0 ${
+        open ? "translate-x-0" : "-translate-x-full"
+      }`}
+    >
       <div>
         <div className="border-b border-rule-dark px-6 py-6">
           <div className="text-xs uppercase tracking-[0.2em] text-amber">
@@ -47,6 +51,7 @@ export default function Sidebar({ userName }) {
               <Link
                 key={item.href}
                 href={item.href}
+                onClick={onClose}
                 className={`rounded-sm px-3 py-2.5 text-sm transition ${
                   active
                     ? "bg-amber text-board-dark font-medium"

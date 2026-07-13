@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import Modal from "@/components/admin/Modal";
+import { formatTime12 } from "@/lib/format";
 
 const DAYS = [
   "Monday",
@@ -85,7 +86,11 @@ export default function TimeSlotsPage() {
   }
 
   async function handleDelete(slot) {
-    if (!confirm(`Delete ${slot.day} ${slot.startTime}–${slot.endTime}?`))
+    if (
+      !confirm(
+        `Delete ${slot.day} ${formatTime12(slot.startTime)}–${formatTime12(slot.endTime)}?`,
+      )
+    )
       return;
     try {
       await api.delete(`/timeslots/${slot._id}`);
@@ -136,7 +141,7 @@ export default function TimeSlotsPage() {
         </p>
       )}
 
-      <div className="mt-6 overflow-hidden rounded-sm border border-rule bg-white">
+      <div className="mt-6 overflow-x-auto rounded-sm border border-rule bg-white">
         <table className="w-full text-left text-sm">
           <thead className="bg-chalk text-xs uppercase tracking-wide text-slate">
             <tr>
@@ -166,8 +171,12 @@ export default function TimeSlotsPage() {
             {slots.map((slot) => (
               <tr key={slot._id} className="border-t border-rule">
                 <td className="px-5 py-3 text-ink">{slot.day}</td>
-                <td className="px-5 py-3 text-slate">{slot.startTime}</td>
-                <td className="px-5 py-3 text-slate">{slot.endTime}</td>
+                <td className="px-5 py-3 text-slate">
+                  {formatTime12(slot.startTime)}
+                </td>
+                <td className="px-5 py-3 text-slate">
+                  {formatTime12(slot.endTime)}
+                </td>
                 <td className="px-5 py-3 text-right">
                   <button
                     onClick={() => openEditModal(slot)}

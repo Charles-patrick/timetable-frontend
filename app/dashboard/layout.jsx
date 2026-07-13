@@ -9,6 +9,7 @@ export default function DashboardLayout({ children }) {
   const router = useRouter();
   const [status, setStatus] = useState("checking"); // "checking" | "ready"
   const [user, setUser] = useState(null);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -42,9 +43,42 @@ export default function DashboardLayout({ children }) {
   }
 
   return (
-    <div className="flex min-h-screen bg-chalk">
-      <Sidebar userName={user?.name} />
-      <main className="flex-1 overflow-y-auto px-10 py-10">{children}</main>
+    <div className="flex h-screen overflow-hidden bg-chalk">
+      {/* Backdrop, mobile only, closes the drawer on tap-outside */}
+      {mobileMenuOpen && (
+        <div
+          onClick={() => setMobileMenuOpen(false)}
+          className="fixed inset-0 z-30 bg-ink/40 lg:hidden"
+        />
+      )}
+
+      <Sidebar
+        userName={user?.name}
+        open={mobileMenuOpen}
+        onClose={() => setMobileMenuOpen(false)}
+      />
+
+      <div className="flex flex-1 flex-col overflow-hidden">
+        {/* Mobile-only top bar with hamburger — hidden at the lg breakpoint,
+            where the sidebar is always visible instead. */}
+        <div className="flex items-center justify-between border-b border-rule bg-white px-4 py-3 lg:hidden">
+          <button
+            onClick={() => setMobileMenuOpen(true)}
+            aria-label="Open menu"
+            className="rounded-sm p-2 text-ink hover:bg-chalk"
+          >
+            ☰
+          </button>
+          <span className="font-display text-sm font-semibold text-ink">
+            Timetable System
+          </span>
+          <span className="w-9" aria-hidden="true" />
+        </div>
+
+        <main className="flex-1 overflow-y-auto px-6 py-8 lg:px-10 lg:py-10">
+          {children}
+        </main>
+      </div>
     </div>
   );
 }

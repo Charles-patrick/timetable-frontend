@@ -180,7 +180,7 @@ export default function SessionsPage() {
           </button>
         </div>
 
-        <div className="mt-4 overflow-hidden rounded-sm border border-rule bg-white">
+        <div className="mt-4 overflow-x-auto rounded-sm border border-rule bg-white">
           <table className="w-full text-left text-sm">
             <thead className="bg-chalk text-xs uppercase tracking-wide text-slate">
               <tr>
@@ -266,7 +266,7 @@ export default function SessionsPage() {
           </p>
         )}
 
-        <div className="mt-4 overflow-hidden rounded-sm border border-rule bg-white">
+        <div className="mt-4 overflow-x-auto rounded-sm border border-rule bg-white">
           <table className="w-full text-left text-sm">
             <thead className="bg-chalk text-xs uppercase tracking-wide text-slate">
               <tr>

@@ -6,7 +6,7 @@ export default function HomePage() {
       {/* Signature element: a ruled grid reminiscent of a physical
           timetable sheet, with period markers down the side — grounded
           in the actual subject instead of a generic gradient hero. */}
-      <section className="relative overflow-hidden border-b border-rule-dark">
+      <section className="relative overflow-hidden border-b border-rule-dark h-screen">
         <div
           className="absolute inset-0 opacity-[0.35]"
           style={{
@@ -30,7 +30,7 @@ export default function HomePage() {
 
           <p className="max-w-xl text-lg text-chalk/80">
             Courses, lecturers, and venues go in. A clash-free timetable comes
-            out — generated automatically, published instantly, searchable by
+            out generated automatically, published instantly, searchable by
             anyone.
           </p>
 
@@ -45,7 +45,7 @@ export default function HomePage() {
               href="/timetable/100"
               className="rounded-sm border border-chalk/30 px-6 py-3 font-sans text-sm font-medium text-chalk transition hover:border-chalk"
             >
-              View a published timetable
+              View timetable
             </Link>
           </div>
         </div>
@@ -53,7 +53,7 @@ export default function HomePage() {
 
       {/* Period-style markers — an honest use of numbering, since a real
           timetable's periods are an actual ordered sequence. */}
-      <section className="mx-auto max-w-5xl px-6 py-16">
+      {/* <section className="mx-auto max-w-5xl px-6 py-16">
         <div className="grid gap-px overflow-hidden rounded-sm border border-rule-dark bg-rule-dark sm:grid-cols-3">
           {[
             {
@@ -83,7 +83,7 @@ export default function HomePage() {
 
       <footer className="border-t border-rule-dark px-6 py-8 text-center text-xs text-chalk/50">
         Online Timetable Generating System
-      </footer>
+      </footer> */}
     </main>
   );
 }
