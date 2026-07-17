@@ -12,21 +12,47 @@ const EMPTY_FORM = {
   courseUnit: "",
   level: 100,
   semester: "",
-  department: "",
-  lecturer: "",
+  departments: [],
+  lecturers: [],
   isLab: false,
   expectedClassSize: "",
 };
+
+function CheckboxList({ options, selected, onToggle, emptyLabel }) {
+  if (options.length === 0) {
+    return <p className="text-sm text-slate">{emptyLabel}</p>;
+  }
+  return (
+    <div className="flex max-h-40 flex-col gap-1 overflow-y-auto rounded-sm border border-rule p-2">
+      {options.map((opt) => (
+        <label
+          key={opt._id}
+          className="flex items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-chalk"
+        >
+          <input
+            type="checkbox"
+            checked={selected.includes(opt._id)}
+            onChange={() => onToggle(opt._id)}
+            className="h-4 w-4 rounded-sm border-rule accent-board"
+          />
+          {opt.name}
+        </label>
+      ))}
+    </div>
+  );
+}
 
 export default function CoursesPage() {
   const [courses, setCourses] = useState([]);
   const [lecturers, setLecturers] = useState([]);
   const [semesters, setSemesters] = useState([]);
+  const [departments, setDepartments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   const [search, setSearch] = useState("");
   const [levelFilter, setLevelFilter] = useState("");
+  const [departmentFilter, setDepartmentFilter] = useState("");
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -34,13 +60,14 @@ export default function CoursesPage() {
   const [formError, setFormError] = useState("");
   const [saving, setSaving] = useState(false);
 
-  async function loadCourses(searchTerm = "", level = "") {
+  async function loadCourses(searchTerm = "", level = "", department = "") {
     setLoading(true);
     setError("");
     try {
       const params = new URLSearchParams();
       if (searchTerm) params.set("search", searchTerm);
       if (level) params.set("level", level);
+      if (department) params.set("department", department);
       const { courses } = await api.get(
         `/courses${params.toString() ? `?${params}` : ""}`,
       );
@@ -54,14 +81,14 @@ export default function CoursesPage() {
 
   async function loadDropdownData() {
     try {
-      const [{ lecturers }, { semesters }] = await Promise.all([
-        api.get("/lecturers"),
-        api.get("/semesters"),
-      ]);
+      const [{ lecturers }, { semesters }, { departments }] = await Promise.all(
+        [api.get("/lecturers"), api.get("/semesters"), api.get("/departments")],
+      );
       setLecturers(lecturers);
       setSemesters(semesters);
+      setDepartments(departments);
     } catch (err) {
-      setError(err.message || "Failed to load lecturers/semesters");
+      setError(err.message || "Failed to load lecturers/semesters/departments");
     }
   }
 
@@ -71,18 +98,17 @@ export default function CoursesPage() {
   }, []);
 
   useEffect(() => {
-    const timer = setTimeout(() => loadCourses(search, levelFilter), 400);
+    const timer = setTimeout(
+      () => loadCourses(search, levelFilter, departmentFilter),
+      400,
+    );
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, levelFilter]);
+  }, [search, levelFilter, departmentFilter]);
 
   function openCreateModal() {
     setEditing(null);
-    setForm({
-      ...EMPTY_FORM,
-      semester: semesters[0]?._id || "",
-      lecturer: lecturers[0]?._id || "",
-    });
+    setForm({ ...EMPTY_FORM, semester: semesters[0]?._id || "" });
     setFormError("");
     setModalOpen(true);
   }
@@ -95,8 +121,8 @@ export default function CoursesPage() {
       courseUnit: course.courseUnit,
       level: course.level,
       semester: course.semester?._id || "",
-      department: course.department,
-      lecturer: course.lecturer?._id || "",
+      departments: course.departments?.map((d) => d._id) || [],
+      lecturers: course.lecturers?.map((l) => l._id) || [],
       isLab: course.isLab || false,
       expectedClassSize: course.expectedClassSize || "",
     });
@@ -104,8 +130,35 @@ export default function CoursesPage() {
     setModalOpen(true);
   }
 
+  function toggleDepartment(id) {
+    setForm((f) => ({
+      ...f,
+      departments: f.departments.includes(id)
+        ? f.departments.filter((d) => d !== id)
+        : [...f.departments, id],
+    }));
+  }
+
+  function toggleLecturer(id) {
+    setForm((f) => ({
+      ...f,
+      lecturers: f.lecturers.includes(id)
+        ? f.lecturers.filter((l) => l !== id)
+        : [...f.lecturers, id],
+    }));
+  }
+
   async function handleSubmit(e) {
     e.preventDefault();
+    if (form.departments.length === 0) {
+      setFormError("Select at least one department");
+      return;
+    }
+    if (form.lecturers.length === 0) {
+      setFormError("Select at least one lecturer");
+      return;
+    }
+
     setSaving(true);
     setFormError("");
 
@@ -125,7 +178,7 @@ export default function CoursesPage() {
         await api.post("/courses", payload);
       }
       setModalOpen(false);
-      await loadCourses(search, levelFilter);
+      await loadCourses(search, levelFilter, departmentFilter);
     } catch (err) {
       setFormError(err.message || "Something went wrong");
     } finally {
@@ -137,13 +190,16 @@ export default function CoursesPage() {
     if (!confirm(`Delete ${course.courseCode}?`)) return;
     try {
       await api.delete(`/courses/${course._id}`);
-      await loadCourses(search, levelFilter);
+      await loadCourses(search, levelFilter, departmentFilter);
     } catch (err) {
       alert(err.message || "Failed to delete course");
     }
   }
 
-  const noDropdownData = lecturers.length === 0 || semesters.length === 0;
+  const noDropdownData =
+    lecturers.length === 0 ||
+    semesters.length === 0 ||
+    departments.length === 0;
 
   return (
     <div>
@@ -167,7 +223,8 @@ export default function CoursesPage() {
 
       {noDropdownData && (
         <p className="mt-2 text-sm text-slate">
-          Add at least one lecturer and one semester before creating courses.
+          Add at least one department, lecturer, and semester before creating
+          courses.
         </p>
       )}
 
@@ -191,6 +248,18 @@ export default function CoursesPage() {
             </option>
           ))}
         </select>
+        <select
+          value={departmentFilter}
+          onChange={(e) => setDepartmentFilter(e.target.value)}
+          className="rounded-sm border border-rule bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-board"
+        >
+          <option value="">All departments</option>
+          {departments.map((d) => (
+            <option key={d._id} value={d._id}>
+              {d.name}
+            </option>
+          ))}
+        </select>
       </div>
 
       {error && (
@@ -208,9 +277,9 @@ export default function CoursesPage() {
             <tr>
               <th className="px-5 py-3">Code</th>
               <th className="px-5 py-3">Title</th>
-              <th className="px-5 py-3">Unit</th>
               <th className="px-5 py-3">Level</th>
-              <th className="px-5 py-3">Lecturer</th>
+              <th className="px-5 py-3">Departments</th>
+              <th className="px-5 py-3">Lecturers</th>
               <th className="px-5 py-3">Semester</th>
               <th className="px-5 py-3 text-right">Actions</th>
             </tr>
@@ -241,10 +310,12 @@ export default function CoursesPage() {
                   )}
                 </td>
                 <td className="px-5 py-3 text-slate">{course.courseTitle}</td>
-                <td className="px-5 py-3 text-slate">{course.courseUnit}</td>
                 <td className="px-5 py-3 text-slate">{course.level}</td>
                 <td className="px-5 py-3 text-slate">
-                  {course.lecturer?.name}
+                  {course.departments?.map((d) => d.name).join(", ")}
+                </td>
+                <td className="px-5 py-3 text-slate">
+                  {course.lecturers?.map((l) => l.name).join(", ")}
                 </td>
                 <td className="px-5 py-3 capitalize text-slate">
                   {course.semester?.name}
@@ -318,34 +389,20 @@ export default function CoursesPage() {
               />
             </label>
 
-            <div className="flex gap-4">
-              <label className="flex flex-1 flex-col gap-1.5 text-sm text-ink">
-                Level
-                <select
-                  value={form.level}
-                  onChange={(e) => setForm({ ...form, level: e.target.value })}
-                  className="rounded-sm border border-rule bg-white px-3 py-2 outline-none focus:border-board"
-                >
-                  {LEVELS.map((l) => (
-                    <option key={l} value={l}>
-                      {l}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="flex flex-1 flex-col gap-1.5 text-sm text-ink">
-                Department
-                <input
-                  required
-                  value={form.department}
-                  onChange={(e) =>
-                    setForm({ ...form, department: e.target.value })
-                  }
-                  className="rounded-sm border border-rule px-3 py-2 outline-none focus:border-board"
-                />
-              </label>
-            </div>
+            <label className="flex flex-col gap-1.5 text-sm text-ink">
+              Level
+              <select
+                value={form.level}
+                onChange={(e) => setForm({ ...form, level: e.target.value })}
+                className="rounded-sm border border-rule bg-white px-3 py-2 outline-none focus:border-board"
+              >
+                {LEVELS.map((l) => (
+                  <option key={l} value={l}>
+                    {l}
+                  </option>
+                ))}
+              </select>
+            </label>
 
             <label className="flex flex-col gap-1.5 text-sm text-ink">
               Semester
@@ -363,21 +420,25 @@ export default function CoursesPage() {
               </select>
             </label>
 
-            <label className="flex flex-col gap-1.5 text-sm text-ink">
-              Lecturer
-              <select
-                required
-                value={form.lecturer}
-                onChange={(e) => setForm({ ...form, lecturer: e.target.value })}
-                className="rounded-sm border border-rule bg-white px-3 py-2 outline-none focus:border-board"
-              >
-                {lecturers.map((l) => (
-                  <option key={l._id} value={l._id}>
-                    {l.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <div className="flex flex-col gap-1.5 text-sm text-ink">
+              Departments offering this course
+              <CheckboxList
+                options={departments}
+                selected={form.departments}
+                onToggle={toggleDepartment}
+                emptyLabel="Add a department first, under Departments."
+              />
+            </div>
+
+            <div className="flex flex-col gap-1.5 text-sm text-ink">
+              Lecturers who can teach this course
+              <CheckboxList
+                options={lecturers}
+                selected={form.lecturers}
+                onToggle={toggleLecturer}
+                emptyLabel="Add a lecturer first, under Lecturers."
+              />
+            </div>
 
             <label className="flex flex-col gap-1.5 text-sm text-ink">
               Expected class size <span className="text-slate">(optional)</span>

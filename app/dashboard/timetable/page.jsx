@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, API_URL } from "@/lib/api";
-import Modal from "@/components/admin/Modal";
 import { formatTime12 } from "@/lib/format";
+import Modal from "@/components/admin/Modal";
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const LEVELS = [100, 200, 300, 400, 500];
@@ -11,6 +11,8 @@ const LEVELS = [100, 200, 300, 400, 500];
 export default function TimetablePage() {
   const [semesters, setSemesters] = useState([]);
   const [selectedSemester, setSelectedSemester] = useState("");
+  const [departments, setDepartments] = useState([]);
+  const [department, setDepartment] = useState("");
   const [level, setLevel] = useState(100);
 
   const [entries, setEntries] = useState([]);
@@ -35,19 +37,23 @@ export default function TimetablePage() {
   useEffect(() => {
     async function init() {
       try {
-        const [{ semesters }, { lecturers }, { venues }, { timeSlots }] = await Promise.all([
-          api.get("/semesters"),
-          api.get("/lecturers"),
-          api.get("/venues"),
-          api.get("/timeslots"),
-        ]);
+        const [{ semesters }, { lecturers }, { venues }, { timeSlots }, { departments }] =
+          await Promise.all([
+            api.get("/semesters"),
+            api.get("/lecturers"),
+            api.get("/venues"),
+            api.get("/timeslots"),
+            api.get("/departments"),
+          ]);
         setSemesters(semesters);
         setLecturers(lecturers);
         setVenues(venues);
         setTimeSlots(timeSlots);
+        setDepartments(departments);
 
         const active = semesters.find((s) => s.active);
         setSelectedSemester(active?._id || semesters[0]?._id || "");
+        setDepartment(departments[0]?._id || "");
       } catch (err) {
         setError(err.message || "Failed to load setup data");
       }
@@ -55,28 +61,32 @@ export default function TimetablePage() {
     init();
   }, []);
 
-  async function loadEntries() {
-    if (!selectedSemester) {
-      setEntries([]);
-      return;
-    }
-    setLoading(true);
-    setError("");
-    try {
-      const params = new URLSearchParams({ semester: selectedSemester, level });
-      const { entries } = await api.get(`/timetable?${params}`);
-      setEntries(entries);
-    } catch (err) {
-      setError(err.message || "Failed to load timetable");
-    } finally {
-      setLoading(false);
-    }
+async function loadEntries(silent = false) {
+  if (!selectedSemester || !department) {
+    setEntries([]);
+    return;
   }
+  if (!silent) setLoading(true);
+  if (!silent) setError("");
+  try {
+    const params = new URLSearchParams({
+      semester: selectedSemester,
+      level,
+      department,
+    });
+    const { entries } = await api.get(`/timetable?${params}`);
+    setEntries(entries);
+  } catch (err) {
+    if (!silent) setError(err.message || "Failed to load timetable");
+  } finally {
+    if (!silent) setLoading(false);
+  }
+}
 
   async function loadCourses() {
-    if (!selectedSemester) return;
+    if (!selectedSemester || !department) return;
     try {
-      const params = new URLSearchParams({ semester: selectedSemester, level });
+      const params = new URLSearchParams({ semester: selectedSemester, level, department });
       const { courses } = await api.get(`/courses?${params}`);
       setCourses(courses);
     } catch (err) {
@@ -84,11 +94,30 @@ export default function TimetablePage() {
     }
   }
 
-  useEffect(() => {
-    loadEntries();
-    loadCourses();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedSemester, level]);
+useEffect(() => {
+  loadEntries();
+  loadCourses();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [selectedSemester, level, department]);
+
+// ── Real-time-ish updates: quietly re-check the server every 20s so an
+// admin viewing the same slice someone else just edited sees the change
+// without refreshing. Paused while a cell's modal is open so it can never
+// pull the grid out from under a form you're mid-way through filling in.
+const cellModalRef = useRef(null);
+useEffect(() => {
+  cellModalRef.current = cellModal;
+}, [cellModal]);
+
+useEffect(() => {
+  if (!selectedSemester || !department) return;
+  const interval = setInterval(() => {
+    if (!cellModalRef.current) {
+      loadEntries(true);
+    }
+  }, 20000);
+  return () => clearInterval(interval);
+}, [selectedSemester, level, department]);
 
   // ── Build the grid: rows = distinct time ranges, columns = days ──
   const timeRanges = useMemo(() => {
@@ -114,16 +143,11 @@ export default function TimetablePage() {
     return map;
   }, [entries]);
 
-//   const coursesAlreadyScheduled = useMemo(
-//     () => new Set(entries.map((e) => e.course._id)),
-//     [entries]
-//   );
-
   async function handleGenerate() {
     if (!selectedSemester) return;
     if (
       !confirm(
-        "Generate a fresh timetable for this semester? This schedules every course across every level. Previous entries stay saved as history."
+        "Generate a fresh timetable for this semester? This schedules every course across every level and department. Previous entries stay saved as history."
       )
     )
       return;
@@ -140,6 +164,13 @@ export default function TimetablePage() {
     } finally {
       setGenerating(false);
     }
+  }
+
+  // Lecturer options for the modal are scoped to whichever course is
+  // selected — a course may only be teachable by 2 of your 10 lecturers.
+  function lecturerOptionsFor(course) {
+    if (course?.lecturers?.length) return course.lecturers;
+    return lecturers; // fallback, shouldn't normally happen
   }
 
   function openCell(day, range) {
@@ -162,7 +193,7 @@ export default function TimetablePage() {
       setCellModal({ mode: "add", day, slot });
       setForm({
         course: "",
-        lecturer: lecturers[0]?._id || "",
+        lecturer: "",
         venue: venues[0]?._id || "",
         timeSlot: slot._id,
       });
@@ -174,7 +205,7 @@ export default function TimetablePage() {
     setForm((f) => ({
       ...f,
       course: courseId,
-      lecturer: course?.lecturer?._id || f.lecturer,
+      lecturer: course?.lecturers?.[0]?._id || "",
     }));
   }
 
@@ -219,20 +250,20 @@ export default function TimetablePage() {
   }
 
   function exportUrl(format) {
-    const params = new URLSearchParams({ semester: selectedSemester, level });
+    const params = new URLSearchParams({ semester: selectedSemester, level, department });
     return `${API_URL}/timetable/export${format === "excel" ? "/excel" : ""}?${params}`;
   }
+
+  const activeCourse =
+    cellModal?.mode === "add" ? courses.find((c) => c._id === form.course) : cellModal?.entry?.course;
 
   return (
     <div>
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 className="font-display text-3xl font-semibold text-ink">
-            Timetable
-          </h1>
+          <h1 className="font-display text-3xl font-semibold text-ink">Timetable</h1>
           <p className="mt-1 text-sm text-slate">
-            One level at a time — click any empty cell to assign a course
-            yourself.
+            One department and level at a time — click any empty cell to assign a course yourself.
           </p>
         </div>
         <button
@@ -240,7 +271,7 @@ export default function TimetablePage() {
           disabled={generating || !selectedSemester}
           className="rounded-sm bg-amber px-5 py-2.5 text-sm font-medium text-board-dark transition hover:bg-amber-dark disabled:opacity-50"
         >
-          {generating ? "Generating…" : " Generate for all levels"}
+          {generating ? "Generating…" : "⚡ Generate for all levels"}
         </button>
       </div>
 
@@ -248,13 +279,9 @@ export default function TimetablePage() {
         <div className="mt-4 rounded-sm border border-rule bg-white p-4 text-sm">
           <p className="text-ink">
             Scheduled <strong>{generateResult.scheduledCount}</strong> of{" "}
-            <strong>{generateResult.totalCourses}</strong> courses across the
-            semester.
+            <strong>{generateResult.totalCourses}</strong> courses across the semester.
             {generateResult.unscheduledCount > 0 && (
-              <span className="text-danger">
-                {" "}
-                {generateResult.unscheduledCount} could not be placed.
-              </span>
+              <span className="text-danger"> {generateResult.unscheduledCount} could not be placed.</span>
             )}
           </p>
           {generateResult.unscheduled?.length > 0 && (
@@ -279,6 +306,19 @@ export default function TimetablePage() {
           {semesters.map((s) => (
             <option key={s._id} value={s._id}>
               {s.session?.name} — {s.name} semester{s.active ? " (active)" : ""}
+            </option>
+          ))}
+        </select>
+
+        <select
+          value={department}
+          onChange={(e) => setDepartment(e.target.value)}
+          className="rounded-sm border border-rule bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-board"
+        >
+          {departments.length === 0 && <option value="">No departments yet</option>}
+          {departments.map((d) => (
+            <option key={d._id} value={d._id}>
+              {d.name}
             </option>
           ))}
         </select>
@@ -312,10 +352,7 @@ export default function TimetablePage() {
       </div>
 
       {error && (
-        <p
-          role="alert"
-          className="mt-4 rounded-sm bg-danger/10 px-4 py-3 text-sm text-danger"
-        >
+        <p role="alert" className="mt-4 rounded-sm bg-danger/10 px-4 py-3 text-sm text-danger">
           {error}
         </p>
       )}
@@ -345,10 +382,7 @@ export default function TimetablePage() {
             <tbody>
               {loading && (
                 <tr>
-                  <td
-                    colSpan={DAYS.length + 1}
-                    className="px-5 py-8 text-center text-slate"
-                  >
+                  <td colSpan={DAYS.length + 1} className="px-5 py-8 text-center text-slate">
                     Loading…
                   </td>
                 </tr>
@@ -363,8 +397,7 @@ export default function TimetablePage() {
                         {formatTime12(startTime)} – {formatTime12(endTime)}
                       </td>
                       {DAYS.map((day) => {
-                        const slot =
-                          slotLookup[`${day}|${startTime}|${endTime}`];
+                        const slot = slotLookup[`${day}|${startTime}|${endTime}`];
                         const entry = slot ? entryLookup[slot._id] : null;
 
                         if (!slot) {
@@ -388,15 +421,9 @@ export default function TimetablePage() {
                           >
                             {entry ? (
                               <div>
-                                <div className="font-medium text-ink">
-                                  {entry.course.courseCode}
-                                </div>
-                                <div className="text-xs text-slate">
-                                  {entry.lecturer.name}
-                                </div>
-                                <div className="text-xs text-slate">
-                                  {entry.venue.name}
-                                </div>
+                                <div className="font-medium text-ink">{entry.course.courseCode}</div>
+                                <div className="text-xs text-slate">{entry.lecturer.name}</div>
+                                <div className="text-xs text-slate">{entry.venue.name}</div>
                               </div>
                             ) : (
                               <div className="text-center text-slate">+</div>
@@ -438,21 +465,26 @@ export default function TimetablePage() {
                     </option>
                   ))}
                 </select>
+                {courses.length === 0 && (
+                  <span className="text-xs text-slate">
+                    No courses found for this department/level/semester combination.
+                  </span>
+                )}
               </label>
             ) : (
-              <p className="text-sm text-slate">
-                {cellModal.entry.course.courseTitle}
-              </p>
+              <p className="text-sm text-slate">{cellModal.entry.course.courseTitle}</p>
             )}
 
             <label className="flex flex-col gap-1.5 text-sm text-ink">
               Lecturer
               <select
+                required
                 value={form.lecturer}
                 onChange={(e) => setForm({ ...form, lecturer: e.target.value })}
                 className="rounded-sm border border-rule bg-white px-3 py-2 outline-none focus:border-board"
               >
-                {lecturers.map((l) => (
+                <option value="">Select a lecturer…</option>
+                {lecturerOptionsFor(activeCourse).map((l) => (
                   <option key={l._id} value={l._id}>
                     {l.name}
                   </option>
@@ -476,10 +508,7 @@ export default function TimetablePage() {
             </label>
 
             {formError && (
-              <p
-                role="alert"
-                className="rounded-sm bg-danger/10 px-3 py-2 text-sm text-danger"
-              >
+              <p role="alert" className="rounded-sm bg-danger/10 px-3 py-2 text-sm text-danger">
                 {formError}
               </p>
             )}
@@ -490,11 +519,7 @@ export default function TimetablePage() {
                 disabled={saving}
                 className="flex-1 rounded-sm bg-board px-4 py-2.5 text-sm font-medium text-chalk transition hover:bg-board-dark disabled:opacity-60"
               >
-                {saving
-                  ? "Saving…"
-                  : cellModal.mode === "add"
-                    ? "Assign course"
-                    : "Save changes"}
+                {saving ? "Saving…" : cellModal.mode === "add" ? "Assign course" : "Save changes"}
               </button>
               {cellModal.mode === "edit" && (
                 <button

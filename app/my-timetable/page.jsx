@@ -48,20 +48,37 @@ useEffect(() => {
     });
 }, []);
 
-  useEffect(() => {
-    if (!semester) return;
-    setLoading(true);
-    setError("");
-    const params = new URLSearchParams({ semester: semester._id });
-    if (dayFilter) params.set("day", dayFilter);
-    if (search) params.set("search", search);
+async function loadEntries(silent = false) {
+  if (!semester) return;
+  if (!silent) setLoading(true);
+  if (!silent) setError("");
+  const params = new URLSearchParams({ semester: semester._id });
+  if (dayFilter) params.set("day", dayFilter);
+  if (search) params.set("search", search);
 
-    api
-      .get(`/timetable/my?${params}`)
-      .then(({ entries }) => setEntries(entries))
-      .catch((err) => setError(err.message || "Failed to load your timetable"))
-      .finally(() => setLoading(false));
-  }, [semester, dayFilter, search]);
+  try {
+    const { entries } = await api.get(`/timetable/my?${params}`);
+    setEntries(entries);
+  } catch (err) {
+    if (!silent) setError(err.message || "Failed to load your timetable");
+  } finally {
+    if (!silent) setLoading(false);
+  }
+}
+
+useEffect(() => {
+  loadEntries();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [semester, dayFilter, search]);
+
+// Real-time-ish updates: quietly re-check every 20s so a lecturer sees
+// an admin's change without needing to refresh the page themselves.
+useEffect(() => {
+  if (!semester) return;
+  const interval = setInterval(() => loadEntries(true), 20000);
+  return () => clearInterval(interval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [semester, dayFilter, search]);
 
   function exportUrl(format) {
     if (!semester) return "#";

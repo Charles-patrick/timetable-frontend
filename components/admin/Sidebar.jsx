@@ -6,6 +6,7 @@ import { api } from "@/lib/api";
 
 const NAV_ITEMS = [
   { href: "/dashboard", label: "Dashboard" },
+  { href: "/dashboard/departments", label: "Departments" },
   { href: "/dashboard/courses", label: "Courses" },
   { href: "/dashboard/lecturers", label: "Lecturers" },
   { href: "/dashboard/venues", label: "Venues" },

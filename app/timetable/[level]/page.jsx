@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { api, API_URL } from "@/lib/api";
@@ -14,61 +14,119 @@ export default function PublicTimetablePage() {
   const level = params.level;
 
   const [semester, setSemester] = useState(null);
+  const [semesterError, setSemesterError] = useState("");
+
+  const [departments, setDepartments] = useState([]);
+  const [department, setDepartment] = useState("");
+
+  const [timeSlots, setTimeSlots] = useState([]);
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [dayFilter, setDayFilter] = useState("");
-  const [search, setSearch] = useState("");
 
-useEffect(() => {
-  api
-    .get("/semesters/active")
-    .then(({ semester }) => {
-      setSemester(semester);
-      if (!semester) {
-        setError(
-          "No active semester has been set yet. An admin needs to activate one first.",
-        );
-        setLoading(false);
-      }
-    })
-    .catch(() => {
-      setError("Could not determine the current semester");
-      setLoading(false);
-    });
-}, []);
-
+  // ── Load semester, departments, time slots once ──────────────
   useEffect(() => {
-    if (!semester) return;
-    setLoading(true);
-    setError("");
-    const params = new URLSearchParams({ semester: semester._id, level });
-    if (dayFilter) params.set("day", dayFilter);
-    if (search) params.set("search", search);
+    api
+      .get("/semesters/active")
+      .then(({ semester }) => {
+        setSemester(semester);
+        if (!semester) {
+          setSemesterError(
+            "No active semester has been set yet. Please check back later.",
+          );
+          setLoading(false);
+        }
+      })
+      .catch(() => {
+        setSemesterError("Could not determine the current semester");
+        setLoading(false);
+      });
 
     api
-      .get(`/timetable/public?${params}`)
-      .then(({ entries }) => setEntries(entries))
-      .catch((err) => setError(err.message || "Failed to load timetable"))
-      .finally(() => setLoading(false));
-  }, [semester, level, dayFilter, search]);
+      .get("/departments/public")
+      .then(({ departments }) => {
+        setDepartments(departments);
+        setDepartment(departments[0]?._id || "");
+      })
+      .catch(() => setError("Could not load departments"));
 
-  function exportUrl(format) {
-    if (!semester) return "#";
-    const params = new URLSearchParams({ semester: semester._id, level });
-    return `${API_URL}/timetable/public/export${format === "excel" ? "/excel" : ""}?${params}`;
+    api
+      .get("/timeslots/public")
+      .then(({ timeSlots }) => setTimeSlots(timeSlots))
+      .catch(() => setError("Could not load time slots"));
+  }, []);
+
+  // ── Load entries whenever semester/level/department is known ─
+  async function loadEntries(silent = false) {
+    if (!semester || !department) return;
+    if (!silent) setLoading(true);
+    if (!silent) setError("");
+    const params = new URLSearchParams({
+      semester: semester._id,
+      level,
+      department,
+    });
+
+    try {
+      const { entries } = await api.get(`/timetable/public?${params}`);
+      setEntries(entries);
+    } catch (err) {
+      if (!silent) setError(err.message || "Failed to load timetable");
+    } finally {
+      if (!silent) setLoading(false);
+    }
   }
 
-  const sorted = [...entries].sort((a, b) => {
-    const dayDiff = DAYS.indexOf(a.timeSlot.day) - DAYS.indexOf(b.timeSlot.day);
-    if (dayDiff !== 0) return dayDiff;
-    return a.timeSlot.startTime.localeCompare(b.timeSlot.startTime);
-  });
+  useEffect(() => {
+    loadEntries();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [semester, level, department]);
+
+  // Real-time-ish updates: this page has no login and no way to know when
+  // an admin publishes a change, so it just quietly re-checks every 20s.
+  useEffect(() => {
+    if (!semester || !department) return;
+    const interval = setInterval(() => loadEntries(true), 20000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [semester, level, department]);
+
+  // ── Build the grid: rows = distinct time ranges, columns = days ──
+  const timeRanges = useMemo(() => {
+    const set = new Set(timeSlots.map((t) => `${t.startTime}|${t.endTime}`));
+    return Array.from(set).sort();
+  }, [timeSlots]);
+
+  const slotLookup = useMemo(() => {
+    const map = {};
+    timeSlots.forEach((t) => {
+      map[`${t.day}|${t.startTime}|${t.endTime}`] = t;
+    });
+    return map;
+  }, [timeSlots]);
+
+  const entryLookup = useMemo(() => {
+    const map = {};
+    entries.forEach((e) => {
+      map[e.timeSlot._id] = e;
+    });
+    return map;
+  }, [entries]);
+
+  function exportUrl(format) {
+    if (!semester || !department) return "#";
+    const params = new URLSearchParams({
+      semester: semester._id,
+      level,
+      department,
+    });
+    return `${API_URL}/timetable/public/export${format === "excel" ? "/excel" : ""}?${params}`;
+  }
 
   return (
     <main className="min-h-screen bg-chalk">
       <header className="border-b border-rule bg-board px-6 py-8 text-chalk">
-        <div className="mx-auto max-w-5xl">
+        <div className="mx-auto max-w-6xl">
           <Link
             href="/"
             className="text-xs uppercase tracking-[0.2em] text-amber"
@@ -86,7 +144,7 @@ useEffect(() => {
         </div>
       </header>
 
-      <div className="mx-auto max-w-5xl px-6 py-8">
+      <div className="mx-auto max-w-6xl px-6 py-8">
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex flex-wrap gap-2">
             {LEVELS.map((l) => (
@@ -105,25 +163,19 @@ useEffect(() => {
           </div>
 
           <select
-            value={dayFilter}
-            onChange={(e) => setDayFilter(e.target.value)}
+            value={department}
+            onChange={(e) => setDepartment(e.target.value)}
             className="ml-auto rounded-sm border border-rule bg-white px-3 py-2 text-sm text-ink outline-none focus:border-board"
           >
-            <option value="">All days</option>
-            {DAYS.map((d) => (
-              <option key={d} value={d}>
-                {d}
+            {departments.length === 0 && (
+              <option value="">No departments yet</option>
+            )}
+            {departments.map((d) => (
+              <option key={d._id} value={d._id}>
+                {d.name}
               </option>
             ))}
           </select>
-
-          <input
-            type="text"
-            placeholder="Search course, lecturer, venue…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full max-w-xs rounded-sm border border-rule bg-white px-3 py-2 text-sm text-ink outline-none focus:border-board"
-          />
         </div>
 
         <div className="mt-4 flex gap-3">
@@ -143,64 +195,103 @@ useEffect(() => {
           </a>
         </div>
 
-        {error && (
+        {(error || semesterError) && (
           <p
             role="alert"
             className="mt-4 rounded-sm bg-danger/10 px-4 py-3 text-sm text-danger"
           >
-            {error}
+            {error || semesterError}
           </p>
         )}
 
-        <div className="mt-6 overflow-x-auto rounded-sm border border-rule bg-white">
-          <table className="w-full text-left text-sm">
-            <thead className="bg-chalk text-xs uppercase tracking-wide text-slate">
-              <tr>
-                <th className="px-5 py-3">Day</th>
-                <th className="px-5 py-3">Time</th>
-                <th className="px-5 py-3">Course</th>
-                <th className="px-5 py-3">Lecturer</th>
-                <th className="px-5 py-3">Venue</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading && (
-                <tr>
-                  <td colSpan={5} className="px-5 py-8 text-center text-slate">
-                    Loading…
-                  </td>
+        {timeSlots.length === 0 ? (
+          <p className="mt-8 text-sm text-slate">
+            No time slots have been published yet.
+          </p>
+        ) : (
+          <div className="mt-6 overflow-x-auto rounded-sm border border-rule bg-white">
+            <table className="w-full border-collapse text-left text-sm">
+              <thead>
+                <tr className="bg-board text-chalk">
+                  <th className="border border-rule-dark px-4 py-3 text-xs uppercase tracking-wide">
+                    Time
+                  </th>
+                  {DAYS.map((day) => (
+                    <th
+                      key={day}
+                      className="border border-rule-dark px-4 py-3 text-xs uppercase tracking-wide"
+                    >
+                      {day}
+                    </th>
+                  ))}
                 </tr>
-              )}
-              {!loading && sorted.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="px-5 py-8 text-center text-slate">
-                    No timetable published for {level} Level yet.
-                  </td>
-                </tr>
-              )}
-              {sorted.map((entry) => (
-                <tr key={entry._id} className="border-t border-rule">
-                  <td className="px-5 py-3 text-ink">{entry.timeSlot.day}</td>
-                  <td className="px-5 py-3 text-slate">
-                    {formatTime12(entry.timeSlot.startTime)} –{" "}
-                    {formatTime12(entry.timeSlot.endTime)}
-                  </td>
-                  <td className="px-5 py-3 text-slate">
-                    <span className="font-medium text-ink">
-                      {entry.course.courseCode}
-                    </span>
-                    <br />
-                    <span className="text-xs">{entry.course.courseTitle}</span>
-                  </td>
-                  <td className="px-5 py-3 text-slate">
-                    {entry.lecturer.name}
-                  </td>
-                  <td className="px-5 py-3 text-slate">{entry.venue.name}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {loading && (
+                  <tr>
+                    <td
+                      colSpan={DAYS.length + 1}
+                      className="px-5 py-8 text-center text-slate"
+                    >
+                      Loading…
+                    </td>
+                  </tr>
+                )}
+
+                {!loading &&
+                  timeRanges.map((range) => {
+                    const [startTime, endTime] = range.split("|");
+                    return (
+                      <tr key={range}>
+                        <td className="whitespace-nowrap border border-rule bg-chalk px-4 py-3 font-medium text-ink">
+                          {formatTime12(startTime)} – {formatTime12(endTime)}
+                        </td>
+                        {DAYS.map((day) => {
+                          const slot =
+                            slotLookup[`${day}|${startTime}|${endTime}`];
+                          const entry = slot ? entryLookup[slot._id] : null;
+
+                          if (!slot) {
+                            return (
+                              <td
+                                key={day}
+                                className="border border-rule bg-rule/20 px-4 py-3 text-center text-slate"
+                              >
+                                —
+                              </td>
+                            );
+                          }
+
+                          return (
+                            <td
+                              key={day}
+                              className="border border-rule bg-white px-4 py-3 align-top"
+                            >
+                              {entry ? (
+                                <div>
+                                  <div className="font-medium text-ink">
+                                    {entry.course.courseCode}
+                                  </div>
+                                  <div className="text-xs text-slate">
+                                    {entry.lecturer.name}
+                                  </div>
+                                  <div className="text-xs text-slate">
+                                    {entry.venue.name}
+                                  </div>
+                                </div>
+                              ) : (
+                                <div>&nbsp;</div>
+                              )}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </main>
   );

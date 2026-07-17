@@ -7,13 +7,13 @@ import { formatTime12 } from "@/lib/format";
 function ConflictGroup({ group }) {
   return (
     <div className="rounded-sm border border-danger/30 bg-danger/5 p-4">
-      <div className="text-xs text-slate">
-        {group[0].timeSlot.day} · {formatTime12(group[0].timeSlot.startTime)} –{" "}
-        {formatTime12(group[0].timeSlot.endTime)}
-      </div>
-      <ul className="mt-2 flex flex-col gap-1">
+      <ul className="flex flex-col gap-2">
         {group.map((entry) => (
           <li key={entry._id} className="text-sm text-ink">
+            <div className="text-xs text-slate">
+              {entry.timeSlot.day} · {formatTime12(entry.timeSlot.startTime)} –{" "}
+              {formatTime12(entry.timeSlot.endTime)}
+            </div>
             <span className="font-medium">{entry.course.courseCode}</span> —{" "}
             {entry.lecturer.name} in {entry.venue.name}{" "}
             <span className="text-slate">(Level {entry.level})</span>
